@@ -28,6 +28,7 @@ use std::path::Path;
 use std::ptr;
 use std::slice;
 use std::str;
+use std::borrow::Borrow;
 
 unsafe impl Send for DB {}
 unsafe impl Sync for DB {}
@@ -780,6 +781,15 @@ impl DB {
         P: AsRef<Path>,
         I: IntoIterator<Item = ColumnFamilyDescriptor>,
     {
+        DB::open_cf_descriptors_borrowed(opts, path, cfs)
+    }
+
+    /// Open a database with the given database options and borrowed column family descriptors.
+    pub fn open_cf_descriptors_borrowed<'a, P, I, CF: Borrow<ColumnFamilyDescriptor>>(opts: &Options, path: P, cfs: I) -> Result<DB, Error>
+    where
+        P: AsRef<Path>,
+        I: IntoIterator<Item = CF>,
+    {
         let cfs: Vec<_> = cfs.into_iter().collect();
 
         let path = path.as_ref();
@@ -809,13 +819,16 @@ impl DB {
                 db = ffi_try!(ffi::rocksdb_open(opts.inner, cpath.as_ptr() as *const _,));
             }
         } else {
-            let mut cfs_v = cfs;
+            let default_cfd = ColumnFamilyDescriptor {
+                name: String::from("default"),
+                options: Options::default(),
+            };
+
+            // this .collect() here is to reduce code duplication -- but we pay an allocation
+            let mut cfs_v: Vec<_> = cfs.iter().map(|x| x.borrow()).collect();
             // Always open the default column family.
             if !cfs_v.iter().any(|cf| cf.name == "default") {
-                cfs_v.push(ColumnFamilyDescriptor {
-                    name: String::from("default"),
-                    options: Options::default(),
-                });
+                cfs_v.push(&default_cfd);
             }
             // We need to store our CStrings in an intermediate vector
             // so that their pointers remain valid.
